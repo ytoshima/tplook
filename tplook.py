@@ -11,7 +11,7 @@ Using curses library, cpu usage and processes using cpu are listed
 at given interval.
 """ 
 
-import os,sys,re,time,curses,logging,traceback
+import os, sys, re, time, curses, logging, traceback, datetime
 import threading
 
 slock = threading.Lock()
@@ -25,31 +25,36 @@ def capscr(scr, sy, sx):
   maxy = scr.getmaxyx()[0]
   lines = ""
   scr.move(sy, sx)
-  y = sy
-  while y < maxy:
-    scr.move(y, 0)
-    l = scr.instr() 
-    if not re.compile("^\s+$").match(l):
+  ypos = sy
+  while ypos < maxy:
+    scr.move(ypos, 0)
+    ln = scr.instr() 
+    if not re.compile("^\s+$").match(ln):
       lines += scr.instr() + "\n" 
-    y += 1
+    ypos += 1
   return lines
 
-def trim(s, lim):
+def trim(string, lim):
   """Trim too long string to something like
      <beginning> ... <end>
      Currently, this function imposes hard-coded 80 characters
      low bound for lim.
   """
-  if len(s) < lim: return s
-  if lim <= 80: return s
-  ln = len(s)
+  if len(string) < lim: 
+    return string
+  if lim <= 80: 
+    return string
   plen = (lim - 5)/2
-  rs = s[:plen] + " ... " + s[-plen:]
+  rs = string[:plen] + " ... " + string[-plen:]
   return rs
 
 class ProcStatError(Exception):
+  """Generic error class for ProcStat
+  """
   def __init__(self, value):
     self.value = value
+    Exception.__init__(self, value)
+
   def __str__(self):
     return repr(self.value)
 
@@ -74,7 +79,10 @@ class ProcStat:
        
   def __str__(self):
     return "%5s %5.2f " % (self.pid, self.getPct()) + self.cmdline
+
   def updateTicks(self):
+    """Update tick data of pid after taking a copy.
+    """
     self.prev_ticks = self.ticks
     self.ticks = ProcStats.getUtimeStime(self.pid)         
 
@@ -87,36 +95,58 @@ class ProcStat:
     return len(self.prev_ticks) > 0
 
   def getTickDiffByIdx(self, idx):
+    """Returns tick diff for given idx.  idx is either 
+       UTICK_IDX or  STICK_IDX.  
+       Created to reduce length of line...
+    """
     return (self.ticks[idx] - self.prev_ticks[idx])
+
   def userTickDiff(self):
+    """Returns user tick diff
+    """
     if not self.dataReady(): 
-      raise ProcStatError("Data not available yet for pid " + pid)
+      raise ProcStatError("Data not available yet for pid " + self.pid)
     return self.getTickDiffByIdx(ProcStat.UTICK_IDX)
+
   def sysTickDiff(self):
+    """Returns sys tick diff
+    """
     if not self.dataReady(): 
-      raise ProcStatError("Data not available yet for pid " + pid)
+      raise ProcStatError("Data not available yet for pid " + self.pid)
     return self.getTickDiffByIdx(ProcStat.STICK_IDX)
+
   def applyMeasurementTickDiff(self, tdiff):
-    self.tdiff = tdiff;
+    """Apply tick diff of last update.  updateTicks() shifts current
+       ticks to prev_ticks and get current into ticks, but there was
+       no simple way to update the time difference between prev_ticks
+       and ticks.  So, the time difference should be updated independently
+       by calling this method right after calling updateTicks().
+    """
+    self.tdiff = tdiff
+
   def getUserPct(self):
-    #if self.userTickDiff() > 4:
-    #  print "D: getUserPct: user tick diff", self.userTickDiff(), "tdiff", self.tdiff
-    # return float(self.userTickDiff())/self.tdiff
+    """Returns user cpu usage of pid in float
+    """
     try:
       return 100.0*float(self.userTickDiff())/self.tdiff
     except TypeError:
       print "E: getUserPct utick ", self.userTickDiff(), " tdiff ", self.tdiff
       raise
+
   def getSysPct(self):
+    """Returns sys cpu usage of pid in float
+    """
     return 100.0*float(self.sysTickDiff())/self.tdiff
+
   def getPct(self):
+    """Returns user + sys cpu usage of pid in float
+    """
     return self.getUserPct() + self.getSysPct()
 
 class ProcStats:
   """A class which contains all process' ProcStat.  Individual process data
      can be looked up by pid.
   """
-  import re
   NUMRE = re.compile("\d+")
   UTIME_IDX = 13
   STIME_IDX = 14
@@ -151,9 +181,9 @@ class ProcStats:
     """ 
     try:
       stfile = file("/proc/" + pid + "/stat")
-      l = stfile.readline()
+      line = stfile.readline()
       stfile.close()
-      return l 
+      return line
     except IOError:
       # return dummy entry
       return "0 "*44 
@@ -175,7 +205,8 @@ class ProcStats:
     except ValueError:
       print "E: getUtimeStime"
       print " data: " + data
-      print " u: " + data[ProcStats.UTIME_IDX] + " s: " + data[ProcStats.STIME_IDX]
+      print " u: " + data[ProcStats.UTIME_IDX] + \
+            " s: " + data[ProcStats.STIME_IDX]
       raise   
   
   @staticmethod
@@ -196,9 +227,9 @@ class ProcStats:
   @staticmethod
   def getMissingElems(s1, s2):
     """generator method which finds s1 elements which are not in s2"""
-    for e in s1:
-      if e not in s2:
-        yield e
+    for elm in s1:
+      if elm not in s2:
+        yield elm
 
   def getProcStat(self, pid):
     """Get ProcStat for given pid.  Create one as needed.
@@ -220,16 +251,16 @@ class ProcStats:
       ps.applyMeasurementTickDiff(self.getMeasurementTickDiff())
     # purge non-existing process
     to_purge = filter(lambda e: e not in pids, self.psmap.keys()) 
-    for x in to_purge:
-      del self.psmap[x]
+    for tgt in to_purge:
+      del self.psmap[tgt]
 
-  def getTopCpuProcs(self,threshold=1.0):
-    """Get ProcStat-s which have higher cpu usage than threshold, sorted in decending 
-       order.
+  def getTopCpuProcs(self, threshold=1.0):
+    """Get ProcStat-s which have higher cpu usage than threshold, sorted in
+       decending order.
     """
     pss = filter(lambda e: e.dataReady(), self.psmap.values())
     pss = filter(lambda e: e.getPct() > threshold, pss)
-    pss.sort(cmp=lambda x,y: cmp(y.getPct(), x.getPct()))
+    pss.sort(cmp=lambda x, y: cmp(y.getPct(), x.getPct()))
     return pss
 
   def cloop(self):
@@ -241,8 +272,8 @@ class ProcStats:
       self.updateStat()
       if len(self.getTopCpuProcs()) > 0:
         print datetime.datetime.now()
-        for e in self.getTopCpuProcs():
-          print e
+        for elm in self.getTopCpuProcs():
+          print elm
       time.sleep(1)
 
 class CpuUse:
@@ -264,7 +295,9 @@ class CpuUse:
     self.prev_vals = []
 
   def name():
-    return name
+    """Returns name of this instance passed to constructor
+    """
+    return self.name
 
   def parseLineAndAdd(self, line):
     """ line: cpu tick number line
@@ -286,9 +319,15 @@ class CpuUse:
       return True
 
   def valDiff(self, idx):
+    """Returns vals (tick) diff for given idx.
+       idx should be one of *_IDX in this class, e.g. USER_IDX, SYS_IDX
+    """
     return self.vals[idx]-self.prev_vals[idx]
 
   def tickDiff(self):
+    """Returns time difference in tick between the current and previous
+       measurements.
+    """
     return self.tick - self.prev_tick
 
   def userPct(self):
@@ -345,12 +384,18 @@ class CpuMeter:
     self.process_stats = ProcStats()
 
   def quit_command(self):
+    """quit command impl
+    """
     self.alive = False 
 
   def version_command(self):
+    """version command impl, not implemented properly yet.
+    """
     self.showWindowSimpleText("version 0.1")
 
   def showWindowSimpleText(str):
+    """show window with text, need more work
+    """
     import textwrap
     self.popup_last_y += 1
     self.popup_last_x += 1
@@ -368,6 +413,8 @@ class CpuMeter:
     popups.append(win)
 
   def getch(self):
+    """simple shortcut to window.getch
+    """
     return self.scr.getch()
 
   def queue_command(self, com):
@@ -376,11 +423,16 @@ class CpuMeter:
     self.command_queue.append(com)
 
   def initColors(self):
+    """initialize curses colors
+    """
     curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_GREEN)
     curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLUE)
     curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_RED)
 
   def loop(self, cui=False):
+    """Repeats data gathering and output until quit is requested or
+       interrupted by ctrl-c.
+    """
     self.alive = True
     self.getProcStat() 
     
@@ -393,22 +445,28 @@ class CpuMeter:
       time.sleep(self.interval)
       self.getProcStat() 
       if cui:
-        self.printProcStat()
+        self.nonCursesPrint()
       else:
         self.cursesUpdate()
     return self.last_lines
 
   def fixLegendWidth(self):
+    """Determines cpu meter's legend with by the longest name of
+       cpu_uses.
+    """
     for k in self.cpu_uses.keys(): 
       cu = self.cpu_uses[k]
       self.legend_width = max(len(cu.name), self.legend_width)
 
   def barWidth(self):
-    #return self.scr.getmaxyx()[0]-self.legend_width
+    """Returns bar width considering legend width.
+    """
     (my, mx) = self.scr.getmaxyx()
     return mx-self.legend_width
 
   def cursesUpdate(self):
+    """Update screen using curses and data
+    """
     if len(self.command_queue) > 0:
       comm = self.command_queue.pop(0)
       logging.debug("got command: " + comm)
@@ -422,7 +480,7 @@ class CpuMeter:
     self.fixLegendWidth()
     bw = self.barWidth()
     ln = 0
-    #for k in self.cpu_uses.keys():
+
     for k in self.cpu_uses_key_list:
       cu = self.cpu_uses[k]
       if not cu.pctReady(): break 
@@ -430,33 +488,25 @@ class CpuMeter:
       self.scr.addstr(ln, 0, cu.name)
        
       cw = int((cu.userPct()/100.0)*bw)
-      #cw = int(bw*cu.userPct()/100.0)
-      #self.scr.addstr(ln, self.legend_width, " "*bw)
-      self.scr.addstr(ln, self.legend_width, " "*cw,curses.color_pair(1))
-      # self.scr.addstr(ln, self.legend_width, " "*int(bw*cu.userPct()/100.0),curses.color_pair(1))
-      self.scr.addstr(" "*int(bw*cu.nicePct()/100.0),curses.color_pair(2))
-      self.scr.addstr(" "*int(bw*cu.sysPct()/100.0),curses.color_pair(3))
+      self.scr.addstr(ln, self.legend_width, " "*cw, curses.color_pair(1))
+      
+      self.scr.addstr(" "*int(bw*cu.nicePct()/100.0), curses.color_pair(2))
+      self.scr.addstr(" "*int(bw*cu.sysPct()/100.0), curses.color_pair(3))
       self.scr.refresh()
       ln += 1
     self.cursesUpdateProcesses()
 
   def num_cpu_lines(self): 
+    """returns the # of lines used by cpu bars
+    """
     return len(self.cpu_uses_key_list)
 
-#   def clearProcessArea(self):
-#     py = self.num_cpu_lines()
-#     (height,width) = self.scr.getmaxyx()
-#     width -= 1
-#     height -= 1
-#     while True:
-#       self.scr.addstr(py, 0, " "*width)
-#       py += 1
-#       if (py > height): break 
-
   def cursesUpdateProcesses(self):
+    """Process cpu usage is updated using curses lib.
+    """
     proc_line_start = self.num_cpu_lines()
     n_process_lines = self.scr.getmaxyx()[0] - proc_line_start
-    #self.clearProcessArea()
+  
     # draw process_stats
     pss = self.process_stats.getTopCpuProcs()
     py = proc_line_start
@@ -473,10 +523,13 @@ class CpuMeter:
         break
     self.scr.refresh()
 
-  def printProcStat(self):
+  def printCpuStat(self):
+    """Print cpu usage by print, not using curses.
+    """
     cu = self.getCpuUse("cpu")
     if cu.pctReady():
-      print "cpu %3d %3d %3d %3d" % (cu.userPct(), cu.nicePct(), cu.sysPct(), cu.idlePct())   
+      print "cpu %3d %3d %3d %3d" % (cu.userPct(), cu.nicePct(), 
+          cu.sysPct(), cu.idlePct())   
     for k in self.cpu_uses.keys():
       if k != "cpu":
         cu = self.cpu_uses[k]
@@ -484,13 +537,29 @@ class CpuMeter:
           print "%3s %3d %3d %3d %3d" \
              %  (k, cu.userPct(), cu.nicePct(), cu.sysPct(), cu.idlePct())   
 
+  def nonCursesPrint(self):
+    if len(self.process_stats.getTopCpuProcs()) > 0:
+      print datetime.datetime.now()
+      self.printCpuStat()
+      self.printProcessStat()
+
+  def printProcessStat(self):
+    pss = self.process_stats.getTopCpuProcs()
+    if len(pss) > 0:
+      for ps in pss:
+        print ps 
+
   def getCpuUse(self, key):
+    """Returns CpuUse instance for key.  Instance is created as needed.
+    """
     if not self.cpu_uses.has_key(key): 
       self.cpu_uses[key] = CpuUse(key)
       self.cpu_uses_key_list.append(key)
     return self.cpu_uses[key]
 
   def getProcStat(self):
+    """Gather data from /proc/stat
+    """
     ps = file("/proc/stat")
     for line in ps:
       if line.find("cpu") == 0: 
@@ -511,12 +580,14 @@ class CpuMeter:
     self.process_stats.updateStat()
 
 def doCUI():
+  """non-curses mode main loop
+  """
   meter = CpuMeter(None)
-  t = threading.Thread(target=command_read_func, kwargs={"cpu_meter": meter})
-  t.start()
   meter.loop(cui=True)
 
 def command_read_func(**args):
+  """Thread entry point for key input reader
+  """
   logging.debug("command_read_func started.")
   meter = args['cpu_meter']
   alive = True
@@ -528,12 +599,17 @@ def command_read_func(**args):
       alive = False
 
 def main(scr):
+  """main for curses mode
+  """
   meter = CpuMeter(scr)
   t = threading.Thread(target=command_read_func, kwargs={"cpu_meter": meter})
+  t.setDaemon(True)
   t.start()
   return meter.loop()
 
 def platformSupported():
+  """Returns true if platform is supported.
+  """
   if sys.platform == "linux2": return True
   return False 
 
@@ -547,7 +623,7 @@ def showHelp():
   """
   print m
 
-if  __name__== '__main__' :
+if  __name__ == '__main__' :
   import getopt
   optlist, args = getopt.getopt(sys.argv[1:], 'hvc', [])
   enableVerboseLogging = False
@@ -567,11 +643,11 @@ if  __name__== '__main__' :
     print "Sorry, Your system type is not supported yet."
     sys.exit(0)
 
-  if useCUI:
-    doCUI()
-  else:
-    try:
+  try:
+    if useCUI:
+      doCUI()
+    else:
       print curses.wrapper(main)
-    except KeyboardInterrupt:
-      logging.shutdown()
-      raise
+  except KeyboardInterrupt:
+    logging.shutdown()
+    sys.exit(0)

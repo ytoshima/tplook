@@ -1,1 +1,2 @@
+#!/bin/sh
 python $(dirname $0)/tplook.py "$@"
